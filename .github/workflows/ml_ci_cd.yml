@@ -1,0 +1,57 @@
+name: ML diabetes-model
+
+# Solo se ejecuta cuando se llama por API (Postman / cURL) con event_type "ml_ci_cd"
+on:
+  repository_dispatch:
+    types: [ml_ci_cd]
+
+jobs:
+  ml_ci_cd:
+    runs-on: ubuntu-latest
+    env:
+      # Los valores del payload pasan por variables de entorno (no directo al shell)
+      DATASET_URL: ${{ github.event.client_payload.url }}
+      IMAGE_TAG: ${{ github.event.client_payload.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: python version
+        run: python --version
+
+      - name: pip install
+        run: python -m pip install -r requirements.txt
+
+      - name: download dataset
+        run: |
+          test -n "$DATASET_URL" || { echo "Falta client_payload.url"; exit 1; }
+          wget -q -O data/diabetes_prediction_dataset.csv "$DATASET_URL"
+
+      - name: cat dataset
+        run: |
+          echo "Filas (sin encabezado): $(($(wc -l < data/diabetes_prediction_dataset.csv) - 1))"
+          head -3 data/diabetes_prediction_dataset.csv
+
+      - name: train model
+        run: python model/train.py
+
+      - name: docker build
+        run: |
+          test -n "$IMAGE_TAG" || { echo "Falta client_payload.sha"; exit 1; }
+          docker build -t ${{ secrets.DOCKER_USER }}/${{ secrets.MODEL_NAME }}:$IMAGE_TAG .
+
+      - name: show images
+        run: docker images
+
+      - name: docker login
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USER" --password-stdin
+
+      - name: docker push
+        run: docker push ${{ secrets.DOCKER_USER }}/${{ secrets.MODEL_NAME }}:$IMAGE_TAG
